@@ -21,11 +21,12 @@ html, body, [class*="css"] {
     padding-bottom: 3rem;
     max-width: 1400px;
 }
+/* 本家風の青いヘッダーや見出し */
 h2 {
     color: #1b3f91;
     font-size: 18px !important;
     font-weight: bold;
-    margin-top: 35px;
+    margin-top: 25px;
     margin-bottom: 12px;
     border-bottom: 2px solid #1b3f91;
     padding-bottom: 4px;
@@ -34,25 +35,51 @@ h2 {
     border: 1px solid #b4c7e7;
     border-radius: 4px;
 }
-/* 表の中の文字サイズと上下の余白（縦幅にゆとりを持たせる） */
+/* 表の縦幅にゆとりを持たせる */
 div[data-testid="stDataFrame"] td, div[data-testid="stDataFrame"] th {
     font-size: 14px !important;
     padding: 12px 4px !important; 
     line-height: 1.6 !important;
+}
+/* 入力エリアのスタイル調整 */
+.search-box {
+    margin-bottom: 20px;
 }
 </style>
     """,
     unsafe_allow_html=True
 )
 
+# =====================================
+# 2. 【新設】銘柄コード4桁 入力エリア
+# =====================================
+# 横並びにして本家ダッシュボードのヘッダー感を再現
+col_code, col_name, _ = st.columns([2, 4, 6])
+
+with col_code:
+    ticker = st.text_input(
+        "銘柄コード (4桁)",
+        value="2158",
+        max_chars=4,
+        key="ticker_input"
+    )
+
+with col_name:
+    # 実際はここにスクレイピングなどの連動を入れますが、今回はビジュアル再現のため固定表示
+    st.markdown(
+        f"<div style='padding-top: 28px; font-size: 18px; font-weight: bold; color: #333333;'>"
+        f"FRONTEO"
+        f"</div>",
+        unsafe_allow_html=True
+    )
+
 st.title("📊 IR Bank 財務データビジュアル完全再現")
 
 # =====================================
-# 2. 本家スクショから1マスずつ100%正確に書き起こしたデータ
+# 3. 本家スクショデータ（100%正確版）
 # =====================================
 years_div = ["2009/03", "2010/03", "2011/03", "2012/03", "2013/03", "2014/03", "2015/03", "2016/03", "2017/03", "2018/03", "2019/03", "2020/03", "2021/03", "2022/03", "2023/03", "2024/03", "2025/03", "2026/03", "27/03予"]
 
-# 本家で値がないマス（-）は、一貫して None（文字列の "-" ではなく数値の欠損）として扱い、後から表示だけを「-」にします。
 div_raw = {
     "一株配当": [None, 5.56, 5.56, 3.33, 3.33, 3.33, 3.33, 3.33, 6.67, 6.67, 11.11, 8.89, 8.89, 11.11, 23.33, 43.67, 48.33, 50.33, 42.00],
     "配当性向": [None, None, 8.9, 61.1, 12.1, 8.5, 12.2, 10.2, 4.2, 8.5, 9.6, 7.3, 7.4, 11.4, 29.2, 30.2, 22.6, 30.0, None],
@@ -77,7 +104,7 @@ cf_raw = {
 df_cf = pd.DataFrame(cf_raw, index=years_cf)
 
 # =====================================
-# 3. 横幅最適化 ＆ フォーマットの厳密再現設定
+# 4. 横幅最適化 ＆ フォーマット再現
 # =====================================
 COLOR_BLUE = "#7ecbfb"
 COLOR_RED = "#ffb3ba"
@@ -88,7 +115,6 @@ def generate_perfect_column_config(df, is_cf=False):
         max_val = float(df[col].max()) if pd.notna(df[col].max()) else 1.0
         min_val = float(df[col].min()) if pd.notna(df[col].min()) else 0.0
         
-        # 本家のスクショ通り、小数点以下の表示桁数を厳密に仕分け
         if col in ["一株配当", "剰余金の配当", "純資産配当率", "自社株買い", "総還元額"]:
             fmt = "%.2f"
             if col in ["剰余金の配当", "自社株買い", "総還元額"]:
@@ -96,13 +122,12 @@ def generate_perfect_column_config(df, is_cf=False):
         elif col in ["配当性向", "総還元性向"]:
             fmt = "%.1f%%"
         elif is_cf and col != "営業CFマージン":
-            fmt = "%.2f億"  # キャッシュフローの数値はすべて「●●.●●億」
+            fmt = "%.2f億"
         elif col == "営業CFマージン":
-            fmt = "%.2f"    # 本家マージン列は「%」マークが付いていないため数値のみ
+            fmt = "%.2f"
         else:
             fmt = "%.2f"
             
-        # 投資・財務・設備投資およびデータ全体がマイナスのものは「薄赤」、それ以外は「水色」
         chosen_color = COLOR_RED if "投資" in col or "財務" in col or (min_val < 0 and max_val <= 0) else COLOR_BLUE
         
         config[col] = st.column_config.ProgressColumn(
@@ -111,19 +136,18 @@ def generate_perfect_column_config(df, is_cf=False):
             min_value=min_val if min_val < 0 else 0.0,
             max_value=max_val if max_val > 0 else 1.0,
             color=chosen_color,
-            width=110  # 桁数が綺麗に1行で収まるように横幅を110に微拡微調
+            width=110
         )
     return config
 
 # =====================================
-# 4. 画面レンダリング（データ欠損を「-」で埋めてスクロールなし表示）
+# 5. 画面レンダリング（スクロールなし表示）
 # =====================================
 
 # ーーーー 配当推移 ーーーー
 st.markdown("<h2>📈 配当推移</h2>", unsafe_allow_html=True)
 div_config = generate_perfect_column_config(df_div)
 
-# 【ポイント】本家と同じ見た目の「-」を表現するため、表示直前に「.fillna("-")」を適用しています。
 st.dataframe(
     df_div.fillna("-"),
     use_container_width=True,
