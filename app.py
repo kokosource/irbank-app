@@ -47,7 +47,7 @@ def fetch_tables(code):
         return None
 
 def search_table(tables, keywords):
-    if tables travels is None: return None
+    if tables is None: return None
     for table in tables:
         text = " ".join(table.astype(str).fillna("").values.flatten())
         if all(word in text for word in keywords):
