@@ -1,4 +1,7 @@
+import numpy as np
 import pandas as pd
+import requests
+from bs4 import BeautifulSoup
 import streamlit as st
 
 # =====================================
@@ -21,7 +24,6 @@ html, body, [class*="css"] {
     padding-bottom: 3rem;
     max-width: 1400px;
 }
-/* 本家風の青いヘッダーや見出し */
 h2 {
     color: #1b3f91;
     font-size: 18px !important;
@@ -35,15 +37,10 @@ h2 {
     border: 1px solid #b4c7e7;
     border-radius: 4px;
 }
-/* 表の縦幅にゆとりを持たせる */
 div[data-testid="stDataFrame"] td, div[data-testid="stDataFrame"] th {
     font-size: 14px !important;
     padding: 12px 4px !important; 
     line-height: 1.6 !important;
-}
-/* 入力エリアのスタイル調整 */
-.search-box {
-    margin-bottom: 20px;
 }
 </style>
     """,
@@ -51,66 +48,120 @@ div[data-testid="stDataFrame"] td, div[data-testid="stDataFrame"] th {
 )
 
 # =====================================
-# 2. 【新設】銘柄コード4桁 入力エリア
+# 2. 【核心】本家IR Bankからデータを自動取得する関数
 # =====================================
-# 横並びにして本家ダッシュボードのヘッダー感を再現
-col_code, col_name, _ = st.columns([2, 4, 6])
+@st.cache_data(ttl=3600)  # 1時間キャッシュして、何度も読み込んで本家に負荷をかけるのを防ぎます
+def fetch_irbank_data(code):
+    """
+    入力された4桁のコードを使って、本家IR Bankから
+    企業名・配当データ・CFデータを自動取得する関数
+    """
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    
+    # ーーーー ① 企業名と配当データの取得 ーーーー
+    div_url = f"https://irbank.net/{code}/dividend"
+    try:
+        response_div = requests.get(div_url, headers=headers, timeout=10)
+        if response_div.status_code != 200:
+            return None, None, None
+    except:
+        return None, None, None
+
+    soup_div = BeautifulSoup(response_div.text, "lxml")
+    
+    # ページタイトルから企業名を抜き出す (例: 「2158 FRONTEO 配当」 -> 「FRONTEO」)
+    title_text = soup_div.title.text if soup_div.title else ""
+    company_name = title_text.replace(str(code), "").replace("配当", "").replace("業績", "").strip()
+    if not company_name:
+        company_name = "企業名取得エラー"
+
+    # 配当テーブルを読み込む
+    tables_div = pd.read_html(response_div.text)
+    df_div_raw = tables_div[0] if tables_div else None
+    
+    # ーーーー ② キャッシュ・フローデータの取得 ーーーー
+    cf_url = f"https://irbank.net/{code}/cf"
+    try:
+        response_cf = requests.get(cf_url, headers=headers, timeout=10)
+        tables_cf = pd.read_html(response_cf.text) if response_cf.status_code == 200 else []
+        df_cf_raw = tables_cf[0] if tables_cf else None
+    except:
+        df_cf_raw = None
+
+    return company_name, df_div_raw, df_cf_raw
+
+# =====================================
+# 3. データの整形（本家の表示形式に整える）
+# =====================================
+def preprocess_dataframe(df, target_cols, index_name="年度"):
+    if df is None:
+        return None
+    
+    # 本家のテーブル構造に合わせて縦横を整える
+    df = df.set_index(df.columns[0])
+    df = df.T
+    df.index.name = index_name
+    
+    # 必要な列だけに絞り込み、存在しない列は空で作成
+    available_cols = [c for c in target_cols if c in df.columns]
+    df = df[available_cols]
+    for col in target_cols:
+        if col not in df.columns:
+            df[col] = np.nan
+            
+    # 文字列データを数値に変換（「億」や「%」を剥ぎ取って純粋な数字にする）
+    for col in df.columns:
+        df[col] = df[col].astype(str).str.replace("円", "").str.replace("億", "").str.replace("%", "").str.replace(",", "")
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+        
+    return df
+
+# =====================================
+# 4. 画面上部：銘柄コード4桁 入力エリア
+# =====================================
+col_code, col_name, _ = st.columns([2, 5, 5])
 
 with col_code:
+    # ユーザーが自由に打ち込める4桁ボックス
     ticker = st.text_input(
         "銘柄コード (4桁)",
-        value="2158",
+        value="2158", # 初期値はFRONTEO
         max_chars=4,
         key="ticker_input"
     )
 
+# データの自動取得を実行
+company_name, raw_div, raw_cf = fetch_irbank_data(ticker)
+
 with col_name:
-    # 実際はここにスクレイピングなどの連動を入れますが、今回はビジュアル再現のため固定表示
-    st.markdown(
-        f"<div style='padding-top: 28px; font-size: 18px; font-weight: bold; color: #333333;'>"
-        f"FRONTEO"
-        f"</div>",
-        unsafe_allow_html=True
-    )
+    # 【新設】データが取れたら、右側に自動で企業名を表示する
+    if company_name and raw_div is not None:
+        st.markdown(
+            f"<div style='padding-top: 28px; font-size: 20px; font-weight: bold; color: #1b3f91;'>"
+            f"🏢 {company_name}"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+    elif ticker:
+        st.markdown(
+            f"<div style='padding-top: 28px; font-size: 15px; font-weight: bold; color: #cc0000;'>"
+            f"⚠️ 該当データがありません"
+            f"</div>",
+            unsafe_allow_html=True
+        )
 
 st.title("📊 IR Bank 財務データビジュアル完全再現")
 
 # =====================================
-# 3. 本家スクショデータ（100%正確版）
-# =====================================
-years_div = ["2009/03", "2010/03", "2011/03", "2012/03", "2013/03", "2014/03", "2015/03", "2016/03", "2017/03", "2018/03", "2019/03", "2020/03", "2021/03", "2022/03", "2023/03", "2024/03", "2025/03", "2026/03", "27/03予"]
-
-div_raw = {
-    "一株配当": [None, 5.56, 5.56, 3.33, 3.33, 3.33, 3.33, 3.33, 6.67, 6.67, 11.11, 8.89, 8.89, 11.11, 23.33, 43.67, 48.33, 50.33, 42.00],
-    "配当性向": [None, None, 8.9, 61.1, 12.1, 8.5, 12.2, 10.2, 4.2, 8.5, 9.6, 7.3, 7.4, 11.4, 29.2, 30.2, 22.6, 30.0, None],
-    "剰余金の配当": [None, None, 2.84, 2.84, 1.70, 1.70, 1.70, 1.70, 1.70, 3.46, 3.47, 5.85, 4.70, 4.71, 5.90, 12.30, 30.30, 28.70, None],
-    "純資産配当率": [None, None, None, 0.60, 0.60, 0.60, 0.50, 0.50, 0.90, 0.80, 1.10, 0.80, 0.70, 0.90, 1.70, 2.90, 2.90, 2.80, None],
-    "自社株買い": [0.03, 0.01, 0.01, 0.00, 0.01, 0.03, 0.07, 0.03, 0.03, 0.04, 0.59, 0.91, 0.67, 0.63, 2.12, 10.00, 0.02, 0.04, None],
-    "総還元額": [0.03, 0.01, 2.85, 2.84, 1.71, 1.73, 1.77, 1.73, 1.73, 3.50, 4.06, 6.76, 5.37, 5.34, 8.02, 22.40, 30.40, 28.80, None],
-    "総還元性向": [0.3, 0.0, 9.0, 61.1, 12.2, 8.6, 12.7, 10.4, 4.2, 8.6, 10.6, 8.7, 8.5, 12.6, 34.2, 43.5, 22.6, 30.0, None]
-}
-df_div = pd.DataFrame(div_raw, index=years_div)
-
-years_cf = ["2009/03", "2010/03", "2011/03", "2012/03", "2013/03", "2014/03", "2015/03", "2016/03", "2017/03", "2018/03", "2019/03", "2020/03", "2021/03", "2022/03", "2023/03", "2024/03", "2025/03", "2026/03"]
-cf_raw = {
-    "営業CF": [51.40, 118.00, 11.10, 72.40, 33.20, -4.25, -14.60, 76.20, 139.00, 33.30, 130.00, -41.30, -25.50, 204.00, -96.70, 133.00, 98.40, 152.00],
-    "投資CF": [-11.50, -7.36, -9.13, -16.50, -11.00, -21.50, -11.90, -18.20, -33.40, -32.30, -38.10, -27.60, -41.80, -19.50, -15.00, -25.50, -29.80, -18.30],
-    "財務CF": [-28.10, -79.30, -10.50, -58.00, -19.70, 16.00, 40.90, -67.80, -82.20, 27.70, -98.50, 55.40, 82.20, -158.00, 122.00, -103.00, -86.60, -101.00],
-    "フリーCF": [39.90, 111.00, 1.94, 55.90, 22.20, -25.80, -26.50, 58.00, 105.00, 0.96, 92.20, -68.90, -67.30, 184.00, -112.00, 108.00, 68.60, 133.00],
-    "設備投資": [-12.90, -15.30, -12.70, -24.10, -14.70, -24.70, -17.20, -21.20, -38.30, -34.30, -27.60, -38.40, -33.20, -25.50, -40.90, -38.90, -26.50, -31.50],
-    "現金等": [42.30, 73.50, 64.90, 62.80, 65.90, 56.10, 70.60, 60.80, 83.70, 112.00, 106.00, 92.80, 108.00, 137.00, 157.00, 161.00, 143.00, 175.00],
-    "営業CFマージン": [4.29, 10.76, 1.13, 9.07, 3.79, -0.47, -1.40, 8.01, 13.39, 3.10, 11.01, -3.25, -2.20, 19.65, -8.19, 10.32, 7.40, 13.18]
-}
-df_cf = pd.DataFrame(cf_raw, index=years_cf)
-
-# =====================================
-# 4. 横幅最適化 ＆ フォーマット再現
+# 5. 横幅最適化 ＆ フォーマット設定
 # =====================================
 COLOR_BLUE = "#7ecbfb"
 COLOR_RED = "#ffb3ba"
 
 def generate_perfect_column_config(df, is_cf=False):
     config = {}
+    if df is None:
+        return config
     for col in df.columns:
         max_val = float(df[col].max()) if pd.notna(df[col].max()) else 1.0
         min_val = float(df[col].min()) if pd.notna(df[col].min()) else 0.0
@@ -131,37 +182,27 @@ def generate_perfect_column_config(df, is_cf=False):
         chosen_color = COLOR_RED if "投資" in col or "財務" in col or (min_val < 0 and max_val <= 0) else COLOR_BLUE
         
         config[col] = st.column_config.ProgressColumn(
-            col,
-            format=fmt,
-            min_value=min_val if min_val < 0 else 0.0,
-            max_value=max_val if max_val > 0 else 1.0,
-            color=chosen_color,
-            width=110
+            col, format=fmt, min_value=min_val if min_val < 0 else 0.0, max_value=max_val if max_val > 0 else 1.0, color=chosen_color, width=110
         )
     return config
 
 # =====================================
-# 5. 画面レンダリング（スクロールなし表示）
+# 6. 表のレンダリング
 # =====================================
+div_cols = ["一株配当", "配当性向", "剰余金の配当", "純資産配当率", "自社株買い", "総還元額", "総還元性向"]
+cf_cols = ["営業CF", "投資CF", "財務CF", "フリーCF", "設備投資", "現金等", "営業CFマージン"]
 
-# ーーーー 配当推移 ーーーー
-st.markdown("<h2>📈 配当推移</h2>", unsafe_allow_html=True)
-div_config = generate_perfect_column_config(df_div)
+df_div = preprocess_dataframe(raw_div, div_cols)
+df_cf = preprocess_dataframe(raw_cf, cf_cols)
 
-st.dataframe(
-    df_div.fillna("-"),
-    use_container_width=True,
-    column_config=div_config,
-    height=820
-)
+if df_div is not None:
+    # ーーーー 配当推移 ーーーー
+    st.markdown("<h2>📈 配当推移</h2>", unsafe_allow_html=True)
+    div_config = generate_perfect_column_config(df_div)
+    st.dataframe(df_div.fillna("-"), use_container_width=True, column_config=div_config, height=820)
 
-# ーーーー キャッシュ・フロー推移 ーーーー
-st.markdown("<h2>💵 キャッシュ・フロー推移</h2>", unsafe_allow_html=True)
-cf_config = generate_perfect_column_config(df_cf, is_cf=True)
-
-st.dataframe(
-    df_cf.fillna("-"),
-    use_container_width=True,
-    column_config=cf_config,
-    height=780
-)
+if df_cf is not None:
+    # ーーーー キャッシュ・フロー推移 ーーーー
+    st.markdown("<h2>💵 キャッシュ・フロー推移</h2>", unsafe_allow_html=True)
+    cf_config = generate_perfect_column_config(df_cf, is_cf=True)
+    st.dataframe(df_cf.fillna("-"), use_container_width=True, column_config=cf_config, height=780)
