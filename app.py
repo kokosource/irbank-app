@@ -10,139 +10,165 @@ import streamlit as st
 # 基本設定
 # =====================================
 st.set_page_config(
-    page_title="IR Bank 推移データ",
+    page_title="IR Bank 完全再現",
     layout="wide"
 )
 
-st.markdown(
-    """
-<style>
-html, body, [class*="css"] { font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
-.main { background-color: #ffffff; }
-h1 { color: #1b3f91; font-weight: 700; }
-h2 { color: #1b3f91; font-size: 22px; margin-top: 30px; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; }
-</style>
-    """,
-    unsafe_allow_html=True
-)
-
-st.title("📊 IR Bank 財務推移")
-stock_code = st.text_input("銘柄コードを入力", "7203")
+# タイトル
+st.title("📊 IR Bank 財務データ再現（配当・CF）")
+stock_code = st.text_input("銘柄コード（例: 7203）", "7203")
 
 # =====================================
-# IR Bank 専用スクレイピング関数
+# 本家再現：汎用データ抽出エンジン
 # =====================================
 @st.cache_data(ttl=3600)
-def parse_irbank_table(code, target_keywords):
+def fetch_and_parse_irbank(code):
     """
-    指定されたキーワード（'配当' や '営業活動'）が含まれるテーブルを
-    BeautifulSoupでパースして正確に二次元配列（DataFrame）にする関数
+    IR BankのHTMLを解析し、本家と同一の見出し（年度）をカラムに、
+    左端の各項目名をインデックスにした巨大な1つのマスタ辞書を生成する
     """
     url = f"https://irbank.net/{code}"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     
+    # 抽出したい本家の正確な項目名リスト
+    target_rows = [
+        "1株配当", "1株配当(調整後)", "配当性向", "DOE",
+        "営業活動によるキャッシュ・フロー", 
+        "投資活動によるキャッシュ・フロー", 
+        "財務活動によるキャッシュ・フロー", 
+        "現金及び現金同等物期末残高"
+    ]
+    
+    extracted_data = {}
+    headers_list = []
+
     try:
         response = requests.get(url, headers=headers, timeout=20)
         if response.status_code != 200:
-            return None
-        
+            return None, None
+            
         soup = BeautifulSoup(response.text, "html5lib")
         tables = soup.find_all("table")
         
         for table in tables:
-            # テーブル全体のテキストを確認してキーワードが含まれるか判定
-            table_text = table.get_text()
-            if not all(word in table_text for word in target_keywords):
+            # テーブル内の全trをスキャン
+            trs = table.find_all("tr")
+            if not trs:
                 continue
                 
-            # --- ここからテーブルデータの正確な抽出 ---
-            rows_data = []
-            
-            # 1. ヘッダー（年度）の取得
+            # 各テーブルにおける「年度ヘッダー」を仮取得
+            current_table_headers = []
             thead = table.find("thead")
-            header_row = []
             if thead:
-                th_elements = thead.find_all("th")
-                header_row = [th.get_text(strip=True) for th in th_elements]
+                current_table_headers = [th.get_text(strip=True) for th in thead.find_all("th")]
             
-            # 2. ボディ（項目名と数値）の取得
-            tbody = table.find("tbody")
-            if tbody:
-                for tr in tbody.find_all("tr"):
-                    row_cells = []
-                    # 項目名 (th または td)
-                    th_item = tr.find("th")
-                    if th_item:
-                        row_cells.append(th_item.get_text(strip=True))
+            for tr in trs:
+                # 左端の項目名 (th または 最初のtd)
+                th_item = tr.find(["th", "td"])
+                if not th_item:
+                    continue
+                
+                # 項目名のテキストを綺麗に掃除
+                item_name = re.sub(r'\s+', '', th_item.get_text(strip=True))
+                
+                # ターゲット項目に部分一致・完全一致するか判定
+                matched_target = None
+                for target in target_rows:
+                    if target in item_name:
+                        matched_target = target
+                        break
+                        
+                if matched_target:
+                    # 値 (td) の全取得
+                    tds = tr.find_all("td")
+                    # 項目名がthに入っていてtdが値になっているケース
+                    values = [td.get_text(strip=True) for td in tds]
                     
-                    # 各年度の数値 (td)
-                    for td in tr.find_all("td"):
-                        row_cells.append(td.get_text(strip=True))
-                    
-                    if row_cells:
-                        rows_data.append(row_cells)
+                    # 万が一、ヘッダー行がtheadにない場合は最上部から生成を試みる
+                    if not headers_list and current_table_headers:
+                        headers_list = current_table_headers
+                        
+                    if matched_target not in extracted_data:
+                        extracted_data[matched_target] = values
+
+        # 最適なカラムヘッダー（年度リスト）の自動補正
+        # 一番データが多く取れている配列の長さを基準にする
+        if extracted_data:
+            max_len = max(len(v) for v in extracted_data.values())
+            if len(headers_list) < max_len:
+                # 足りない場合は適当なダミーではなく、右側を起点に合わせる
+                headers_list = ["項目名"] + [f"期_{i}" for i in range(max_len - 1)]
+            else:
+                # 最初の「決算期」や「年月」という見出しを「項目名」に固定
+                headers_list[0] = "項目名"
+                
+            return extracted_data, headers_list[:max_len+1]
             
-            # theadがなくて一続きのテーブルの場合のフォールバック
-            if not header_row and rows_data:
-                # 最初の行をヘッダーと仮定
-                header_row = rows_data.pop(0)
-            
-            if rows_data and header_row:
-                # カラム数を合わせる調整
-                max_cols = max(len(header_row), max(len(r) for r in rows_data))
-                if len(header_row) < max_cols:
-                    header_row += [""] * (max_cols - len(header_row))
-                
-                cleaned_rows = []
-                for r in rows_data:
-                    if len(r) < max_cols:
-                        r += [""] * (max_cols - len(r))
-                    cleaned_rows.append(r[:max_cols])
-                
-                # DataFrame化
-                df = pd.DataFrame(cleaned_rows, columns=header_row[:max_cols])
-                return df
-                
-        return None
     except Exception as e:
-        st.error(f"エラー発生: {e}")
-        return None
+        st.error(f"パース中にエラーが発生しました: {e}")
+        
+    return None, None
 
 # =====================================
 # メイン表示処理
 # =====================================
 if stock_code:
+    data_dict, headers = fetch_and_parse_irbank(stock_code)
     
-    # -------------------------------------
-    # 1. 配当推移
-    # -------------------------------------
-    st.header("🔗 配当推移")
-    # 「配当」という言葉が入っているテーブルを抽出
-    dividend_df = parse_irbank_table(stock_code, ["配当"])
-    
-    if dividend_df is not None:
-        # 表の見栄えをよくするため、最初の列をインデックスに設定
-        first_col = dividend_df.columns[0]
-        dividend_df = dividend_df.set_index(first_col)
+    if data_dict and headers:
+        columns_years = headers[1:] # 年度の一覧（例: '2021/03', '2022/03' ...）
         
-        # IR Bankと同じ横長の表を表示
-        st.dataframe(dividend_df, use_container_width=True)
-    else:
-        st.warning("配当データテーブルの取得に失敗したか、データがありません。")
-
-    # -------------------------------------
-    # 2. キャッシュ・フロー推移
-    # -------------------------------------
-    st.header("🔗 キャッシュ・フロー推移")
-    # 「営業活動」と「投資活動」という言葉が入っているテーブルを抽出
-    cf_df = parse_irbank_table(stock_code, ["営業活動", "投資活動"])
-    
-    if cf_df is not None:
-        # 最初の列をインデックスに設定
-        first_col = cf_df.columns[0]
-        cf_df = cf_df.set_index(first_col)
+        # -------------------------------------
+        # 1. 配当推移の本家再現
+        # -------------------------------------
+        st.header("🔗 配当推移（本家再現）")
         
-        # IR Bankと同じ横長の表を表示
-        st.dataframe(cf_df, use_container_width=True)
+        div_targets = ["1株配当", "1株配当(調整後)", "配当性向", "DOE"]
+        div_rows = []
+        div_index = []
+        
+        for tgt in div_targets:
+            if tgt in data_dict:
+                # カラム数に長さを適合させる
+                vals = data_dict[tgt]
+                if len(vals) < len(columns_years):
+                    vals += [""] * (len(columns_years) - len(vals))
+                div_rows.append(vals[:len(columns_years)])
+                div_index.append(tgt)
+                
+        if div_rows:
+            df_div = pd.DataFrame(div_rows, columns=columns_years, index=div_index)
+            st.dataframe(df_div, use_container_width=True)
+        else:
+            st.warning("配当に関する項目が見つかりませんでした。")
+            
+        # -------------------------------------
+        # 2. キャッシュ・フロー推移の本家再現
+        # -------------------------------------
+        st.header("🔗 キャッシュ・フロー推移（本家再現）")
+        
+        cf_targets = [
+            "営業活動によるキャッシュ・フロー", 
+            "投資活動によるキャッシュ・フロー", 
+            "財務活動によるキャッシュ・フロー", 
+            "現金及び現金同等物期末残高"
+        ]
+        cf_rows = []
+        cf_index = []
+        
+        for tgt in cf_targets:
+            if tgt in data_dict:
+                vals = data_dict[tgt]
+                if len(vals) < len(columns_years):
+                    vals += [""] * (len(columns_years) - len(vals))
+                cf_rows.append(vals[:len(columns_years)])
+                cf_index.append(tgt)
+                
+        if cf_rows:
+            df_cf = pd.DataFrame(cf_rows, columns=columns_years, index=cf_index)
+            st.dataframe(df_cf, use_container_width=True)
+        else:
+            st.warning("キャッシュ・フローに関する項目が見つかりませんでした。")
+            
     else:
-        st.warning("キャッシュ・フローデータテーブルの取得に失敗したか、データがありません。")
+        st.error("IR Bankからデータを解析できませんでした。銘柄コードが正しいか確認してください。")
