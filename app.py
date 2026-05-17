@@ -72,10 +72,18 @@ def clean_and_transpose_dataframe(df):
     df.index = clean_years
     df.index.name = "年度"
     
-    # 全セルのテキストクレンジング（数値化）
-    for col in df.columns:
-        df[col] = df[col].astype(str).str.replace(r"[財政|,]清算|円|百万円|%|,", "", regex=True)
-        df[col] = pd.to_numeric(df[col], errors='coerce')
+    # 全セルのテキストクレンジング（要素単位で安全に実行）
+    def clean_value(val):
+        if pd.isna(val):
+            return np.nan
+        s = re.sub(r"[財政|,]清算|円|百万円|%|,", "", str(val))
+        try:
+            return float(s)
+        except ValueError:
+            return np.nan
+
+    # df.map で一括適用（重複列名のエラーを回避）
+    df = df.map(clean_value)
         
     return df
 
@@ -85,7 +93,6 @@ def clean_and_transpose_dataframe(df):
 def make_combined_cf_chart(df, title):
     fig = go.Figure()
     
-    # 存在するカラムだけ安全に描画
     if "営業活動" in df.columns:
         fig.add_trace(go.Bar(x=df.index, y=df["営業活動"], name="営業CF", marker_color="#10b981"))
     if "投資活動" in df.columns:
@@ -99,7 +106,7 @@ def make_combined_cf_chart(df, title):
         title=title, height=400, barmode="group",
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
         margin=dict(l=10, r=10, t=50, b=10),
-        legend=dict(orientation="h", ylink=1, y=1.1, x=0),
+        legend=dict(orientation="h", y=1.1, x=0),
         yaxis=dict(gridcolor="#e2e8f0", title="百万円")
     )
     return fig
@@ -118,25 +125,28 @@ if stock_code:
         div_raw = search_table(tables, ["配当"])
         
         if div_raw is not None:
-            # データ整形
             div_df = clean_and_transpose_dataframe(div_raw)
             
-            # メインの配当列（通常は最初の列、または「配当」が含まれる列）を取得
-            div_col = [c for c in div_df.columns if "配当" in c][0] if any("配当" in c for c in div_df.columns) else div_df.columns[0]
+            # 「配当」が含まれる列名を取得し、重複があっても最初の1列に絞る
+            available_div_cols = [c for c in div_df.columns if "配当" in c]
+            div_col = available_div_cols[0] if available_div_cols else div_df.columns[0]
+            
+            # 表示用データフレームの切り出し（重複列対策を徹底）
+            display_div_df = div_df[[div_col]]
+            if isinstance(display_div_df, pd.DataFrame) and display_div_df.shape[1] > 1:
+                display_div_df = display_div_df.iloc[:, [0]]
 
             col1, col2 = st.columns([1, 1])
             
             with col1:
                 st.subheader("配当データ一覧")
-                # column_configで見た目を美しく
                 st.dataframe(
-                    div_df[[div_col]], 
+                    display_div_df, 
                     use_container_width=True,
                     column_config={
                         div_col: st.column_config.NumberColumn(
                             "1株配当額", 
-                            format="¥%.1f",
-                            help="該当年度の年間配当金"
+                            format="¥%.1f"
                         )
                     }
                 )
@@ -144,10 +154,12 @@ if stock_code:
             with col2:
                 # Plotlyでラインチャート
                 fig = go.Figure()
+                # 描画時はシリーズ（1次元）に確定させるため .iloc[:, 0] を指定
+                y_data = display_div_df.iloc[:, 0]
                 fig.add_trace(go.Scatter(
-                    x=div_df.index, y=div_df[div_col],
+                    x=display_div_df.index, y=y_data,
                     mode="lines+markers+text",
-                    text=div_df[div_col].map(lambda x: f"¥{x:.0f}" if pd.notnull(x) else ""),
+                    text=y_data.map(lambda x: f"¥{x:.0f}" if pd.notnull(x) else ""),
                     textposition="top center",
                     line=dict(color="#1e3a8a", width=3),
                     marker=dict(size=8)
@@ -171,25 +183,32 @@ if stock_code:
         if cf_raw is not None:
             cf_df = clean_and_transpose_dataframe(cf_raw)
             
-            # IR Bankの元の項目名と一致させる（部分一致でカラム特定）
+            # 表内の表記ゆれ・重複列を吸収して名前を統一
             col_map = {}
             for c in cf_df.columns:
-                if "営業" in c: col_map[c] = "営業活動"
-                elif "投資" in c: col_map[c] = "投資活動"
-                elif "財務" in c: col_map[c] = "財務活動"
-                elif "現金" in c: col_map[c] = "現金等"
+                if "営業" in c and "営業活動" not in col_map.values(): col_map[c] = "営業活動"
+                elif "投資" in c and "投資活動" not in col_map.values(): col_map[c] = "投資活動"
+                elif "財務" in c and "財務活動" not in col_map.values(): col_map[c] = "財務活動"
+                elif "現金" in c and "現金等" not in col_map.values(): col_map[c] = "現金等"
             
             cf_df = cf_df.rename(columns=col_map)
-            # 必要なカラムだけ順序を整えて抽出
             available_cols = [c for c in ["営業活動", "投資活動", "財務活動", "現金等"] if c in cf_df.columns]
-            display_cf_df = cf_df[available_cols]
+            
+            # 1列ずつ確実に抽出して重複カラムを完全に排除
+            extracted_cols = []
+            for col_name in available_cols:
+                sub_df = cf_df[col_name]
+                if isinstance(sub_df, pd.DataFrame):
+                    sub_df = sub_df.iloc[:, 0]
+                extracted_cols.append(sub_df.rename(col_name))
+            
+            display_cf_df = pd.concat(extracted_cols, axis=1)
 
-            # カラムごとのスタイルを設定
+            # カラムごとのスタイル設定
             config = {
                 c: st.column_config.NumberColumn(format="%,d 百万円") 
-                for c in available_cols if c != "現金等"
+                for c in display_cf_df.columns if c != "現金等"
             }
-            # 営業CFにはミニバー（視覚効果）を追加
             if "営業活動" in display_cf_df.columns:
                 config["営業活動"] = st.column_config.ProgressColumn(
                     "営業活動CF", 
