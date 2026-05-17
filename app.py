@@ -1,41 +1,41 @@
-import lxml
+!pip install streamlit pyngrok lxml html5lib
+
+from pyngrok import ngrok
+import threading
 import streamlit as st
 import pandas as pd
-import requests
+
+app_code = '''
+import streamlit as st
+import pandas as pd
 
 st.title("IR Bank Viewer")
 
-code = st.text_input("銘柄コード", "3003")
+code = st.text_input("銘柄コード", "7203")
 
-url = f"https://irbank.net/{code}/results"
+if code:
+    url = f"https://irbank.net/{code}"
 
-headers = {
-    "User-Agent": "Mozilla/5.0"
-}
+    try:
+        tables = pd.read_html(url, flavor="html5lib")
 
-try:
-    response = requests.get(url, headers=headers)
+        st.success("取得成功！")
+        st.write(f"表の数: {len(tables)}")
 
-    tables = pd.read_html(response.text)
+        st.dataframe(tables[0])
 
-    found = False
+    except Exception as e:
+        st.error(f"取得失敗: {e}")
+'''
 
-    for table in tables:
+with open("app.py", "w", encoding="utf-8") as f:
+    f.write(app_code)
 
-        text = table.to_string()
+def run():
+    import os
+    os.system("streamlit run app.py --server.port 8501")
 
-        if "配当" in text:
-            st.subheader("配当推移")
-            st.dataframe(table)
-            found = True
+threading.Thread(target=run).start()
 
-        if "キャッシュフロー" in text:
-            st.subheader("キャッシュフロー")
-            st.dataframe(table)
-            found = True
-
-    if not found:
-        st.warning("表が見つかりませんでした")
-
-except Exception as e:
-    st.error(f"取得失敗: {e}")
+public_url = ngrok.connect(8501)
+print(public_url)
