@@ -1,11 +1,3 @@
-!pip install streamlit pyngrok lxml html5lib
-
-from pyngrok import ngrok
-import threading
-import streamlit as st
-import pandas as pd
-
-app_code = '''
 import streamlit as st
 import pandas as pd
 
@@ -26,16 +18,3 @@ if code:
 
     except Exception as e:
         st.error(f"取得失敗: {e}")
-'''
-
-with open("app.py", "w", encoding="utf-8") as f:
-    f.write(app_code)
-
-def run():
-    import os
-    os.system("streamlit run app.py --server.port 8501")
-
-threading.Thread(target=run).start()
-
-public_url = ngrok.connect(8501)
-print(public_url)
