@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import requests
 
 st.title("IR Bank Viewer")
 
@@ -8,11 +9,16 @@ code = st.text_input("銘柄コード", "7203")
 if code:
     url = f"https://irbank.net/{code}"
 
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
+
     try:
-        tables = pd.read_html(url, flavor="html5lib")
+        response = requests.get(url, headers=headers)
+
+        tables = pd.read_html(response.text)
 
         st.success("取得成功！")
-        st.write(f"表の数: {len(tables)}")
 
         st.dataframe(tables[0])
 
