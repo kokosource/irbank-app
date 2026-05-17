@@ -10,29 +10,42 @@ st.set_page_config(
     layout="wide"
 )
 
+# 【大幅改善】テーブル内の文字サイズを大きくし、縦の余白（行高）を広げて見やすく固定
 st.markdown(
     """
 <style>
+/* 全体の基本設定 */
 html, body, [class*="css"] {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Kaku Gothic ProN", sans-serif;
     background-color: #ffffff;
 }
 .block-container {
-    padding-top: 1.5rem;
+    padding-top: 1rem;
+    padding-bottom: 1rem;
     max-width: 1400px;
 }
+
+/* 見出しのデザイン */
 h2 {
     color: #1b3f91;
     font-size: 18px !important;
     font-weight: bold;
-    margin-top: 30px;
-    margin-bottom: 10px;
+    margin-top: 25px;
+    margin-bottom: 5px;
     border-bottom: 2px solid #1b3f91;
-    padding-bottom: 6px;
+    padding-bottom: 4px;
 }
+
+/* 枠線の設定 */
 .stDataFrame {
     border: 1px solid #b4c7e7;
     border-radius: 4px;
+}
+
+/* 【追加】表の中のフォントサイズと縦幅（パディング）を広げるための仕組み */
+div[data-testid="stDataFrame"] td, div[data-testid="stDataFrame"] th {
+    font-size: 15px !important;
+    padding: 10px 4px !important; /* 上下の余白を広げて縦幅を出しています */
 }
 </style>
     """,
@@ -42,7 +55,7 @@ h2 {
 st.title("📊 IR Bank 財務データビジュアル完全再現")
 
 # =====================================
-# 2. 財務データ群（データはそのまま維持）
+# 2. 財務データ群
 # =====================================
 years_div = ["2009/03", "2010/03", "2011/03", "2012/03", "2013/03", "2014/03", "2015/03", "2016/03", "2017/03", "2018/03", "2019/03", "2020/03", "2021/03", "2022/03", "2023/03", "2024/03", "2025/03", "2026/03", "27/03予"]
 div_raw = {
@@ -69,63 +82,63 @@ cf_raw = {
 df_cf = pd.DataFrame(cf_raw, index=years_cf)
 
 # =====================================
-# 3. カリスマ再現 ＆ 挙動安定化設定（width追加）
+# 3. カリスマ再現 ＆ 1画面フィット設定（width=95）
 # =====================================
 COLOR_BLUE = "#7ecbfb"
 COLOR_RED = "#ffb3ba"
 
-def generate_fixed_column_config(df, is_cf=False):
+def generate_compact_column_config(df, is_cf=False):
     """
-    widthを指定して列幅を完全固定し、画面のブレやカタつきを無くす関数
+    横幅を極限までコンパクト(width=95)にしつつ、インジケーターバーを綺麗に収める関数
     """
     config = {}
     for col in df.columns:
         max_val = float(df[col].max()) if pd.notna(df[col].max()) else 1.0
         min_val = float(df[col].min()) if pd.notna(df[col].min()) else 0.0
         
-        # フォーマットの設定
+        # 数値フォーマット（横幅を削るため「億」などの文字は極力シンプルに表示）
         if "性向" in col or "マージン" in col or "純資産" in col:
-            fmt = "%.2f" if "純資産" in col else "%.2f %%"
+            fmt = "%.1f" if "純資産" in col else "%.1f%%"
         elif "一株" in col:
-            fmt = "¥%.2f"
+            fmt = "¥%.1f"
         else:
-            fmt = "%.2f 億" if is_cf or col in ["剰余金の配当", "自社株買い", "総還元額"] else "%.2f"
+            fmt = "%.1f億" if is_cf or col in ["剰余金の配当", "自社株買い", "総還元額"] else "%.1f"
             
         chosen_color = COLOR_RED if "投資" in col or "財務" in col or (min_val < 0 and max_val <= 0) else COLOR_BLUE
         
-        # 【解決策】width=160 を設定して列の自動伸縮を完全にロックする
+        # 【解決策】widthを「160」から「95」に絞り込み、画面内にすべての列が整列するようにロック
         config[col] = st.column_config.ProgressColumn(
             col,
             format=fmt,
             min_value=min_val if min_val < 0 else 0.0,
             max_value=max_val if max_val > 0 else 1.0,
             color=chosen_color,
-            width=160  # ← ここで幅をしっかり固定
+            width=95  # 横幅をギュッと狭くしました
         )
     return config
 
 # =====================================
-# 4. 画面レンダリング（幅固定版）
+# 4. 画面レンダリング（スクロールゼロ仕様）
 # =====================================
 
 # ーーーー 配当推移 ーーーー
 st.markdown("<h2>📈 配当推移</h2>", unsafe_allow_html=True)
-div_config = generate_fixed_column_config(df_div)
+div_config = generate_compact_column_config(df_div)
 
 st.dataframe(
     df_div,
     use_container_width=True,
-    height=550,
+    height=None,  # 【解決策】heightをNoneにすることで、縦スクロールバーを消し去り全行一発表示
     column_config=div_config
 )
 
 # ーーーー キャッシュ・フロー推移 ーーーー
 st.markdown("<h2>💵 キャッシュ・フロー推移</h2>", unsafe_allow_html=True)
-cf_config = generate_fixed_column_config(df_cf, is_cf=True)
+cf_config = generate_compact_column_config(df_cf, is_cf=True)
 
 st.dataframe(
     df_cf,
     use_container_width=True,
-    height=530,
+    height=None,  # 縦スクロールなしで全データをピタッと表示
     column_config=cf_config
 )
