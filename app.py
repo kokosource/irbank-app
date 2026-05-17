@@ -3,14 +3,13 @@ import pandas as pd
 import streamlit as st
 
 # =====================================
-# 1. ページ基本設定 & 本家IR Bankの見た目CSS
+# 1. ページ基本設定 & 本家IR Bank風CSS（縦幅をさらに拡張）
 # =====================================
 st.set_page_config(
     page_title="IR Bank 財務・業績完全再現",
     layout="wide"
 )
 
-# テーブル内のフォントサイズと上下の余白（パディング）を広げて縦にゆったり見せる
 st.markdown(
     """
 <style>
@@ -21,7 +20,7 @@ html, body, [class*="css"] {
 }
 .block-container {
     padding-top: 1rem;
-    padding-bottom: 1rem;
+    padding-bottom: 2rem;
     max-width: 1400px;
 }
 
@@ -30,8 +29,8 @@ h2 {
     color: #1b3f91;
     font-size: 18px !important;
     font-weight: bold;
-    margin-top: 25px;
-    margin-bottom: 5px;
+    margin-top: 30px;
+    margin-bottom: 8px;
     border-bottom: 2px solid #1b3f91;
     padding-bottom: 4px;
 }
@@ -42,10 +41,12 @@ h2 {
     border-radius: 4px;
 }
 
-/* 表の中のフォントサイズと、上下の余白（パディング）を広げて縦幅を出す設定 */
+/* 【重要】行の縦幅をがっつり広げるための指定 */
+/* line-height（行高）と padding（上下余白）を大きめに設定しています */
 div[data-testid="stDataFrame"] td, div[data-testid="stDataFrame"] th {
     font-size: 14px !important;
-    padding: 10px 4px !important; 
+    padding: 14px 4px !important; /* 上下の余白を14pxまで広げました */
+    line-height: 1.6 !important;
 }
 </style>
     """,
@@ -82,15 +83,12 @@ cf_raw = {
 df_cf = pd.DataFrame(cf_raw, index=years_cf)
 
 # =====================================
-# 3. カリスマ再現 ＆ 1画面フィット設定（width=95）
+# 3. 横幅最適化設定 (width=95)
 # =====================================
 COLOR_BLUE = "#7ecbfb"
 COLOR_RED = "#ffb3ba"
 
 def generate_compact_column_config(df, is_cf=False):
-    """
-    横幅をコンパクト(width=95)にしつつ、インジケーターバーを綺麗に収める関数
-    """
     config = {}
     for col in df.columns:
         max_val = float(df[col].max()) if pd.notna(df[col].max()) else 1.0
@@ -105,27 +103,25 @@ def generate_compact_column_config(df, is_cf=False):
             
         chosen_color = COLOR_RED if "投資" in col or "財務" in col or (min_val < 0 and max_val <= 0) else COLOR_BLUE
         
-        # 列幅を「95ピクセル」に指定して横スクロールを完全に排除
         config[col] = st.column_config.ProgressColumn(
             col,
             format=fmt,
             min_value=min_val if min_val < 0 else 0.0,
             max_value=max_val if max_val > 0 else 1.0,
             color=chosen_color,
-            width=95  
+            width=95  # 横幅をスマートに収める
         )
     return config
 
 # =====================================
-# 4. 画面レンダリング（エラー修正・スクロールゼロ仕様）
+# 4. 画面レンダリング（高さ自動・スクロールなし）
 # =====================================
 
 # ーーーー 配当推移 ーーーー
 st.markdown("<h2>📈 配当推移</h2>", unsafe_allow_html=True)
 div_config = generate_compact_column_config(df_div)
 
-# 【修正箇所】heightの指定を削除しました。
-# これにより、Streamlitの内部構造がバグることなく、自動的に全行が引き伸ばされて表示されます。
+# heightオプションを完全に外すことで、枠内のスクロールバーを消し去り、全行を縦に引き伸ばして表示します
 st.dataframe(
     df_div,
     use_container_width=True,
