@@ -3,7 +3,7 @@ import pandas as pd
 import streamlit as st
 
 # =====================================
-# 1. ページ基本設定 & 本家IR Bank風CSS（縦幅をさらに拡張）
+# 1. ページ基本設定 & 本家IR Bank風CSS
 # =====================================
 st.set_page_config(
     page_title="IR Bank 財務・業績完全再現",
@@ -20,7 +20,7 @@ html, body, [class*="css"] {
 }
 .block-container {
     padding-top: 1rem;
-    padding-bottom: 2rem;
+    padding-bottom: 3rem;
     max-width: 1400px;
 }
 
@@ -29,8 +29,8 @@ h2 {
     color: #1b3f91;
     font-size: 18px !important;
     font-weight: bold;
-    margin-top: 30px;
-    margin-bottom: 8px;
+    margin-top: 35px;
+    margin-bottom: 12px;
     border-bottom: 2px solid #1b3f91;
     padding-bottom: 4px;
 }
@@ -41,11 +41,10 @@ h2 {
     border-radius: 4px;
 }
 
-/* 【重要】行の縦幅をがっつり広げるための指定 */
-/* line-height（行高）と padding（上下余白）を大きめに設定しています */
+/* 表の中の文字サイズと上下の余白（行の縦幅をゆったり広げる） */
 div[data-testid="stDataFrame"] td, div[data-testid="stDataFrame"] th {
     font-size: 14px !important;
-    padding: 14px 4px !important; /* 上下の余白を14pxまで広げました */
+    padding: 12px 4px !important; 
     line-height: 1.6 !important;
 }
 </style>
@@ -109,31 +108,34 @@ def generate_compact_column_config(df, is_cf=False):
             min_value=min_val if min_val < 0 else 0.0,
             max_value=max_val if max_val > 0 else 1.0,
             color=chosen_color,
-            width=95  # 横幅をスマートに収める
+            width=95  # 横幅をスマートに固定
         )
     return config
 
 # =====================================
-# 4. 画面レンダリング（高さ自動・スクロールなし）
+# 4. 画面レンダリング（縦幅を固定値で最大拡張）
 # =====================================
 
 # ーーーー 配当推移 ーーーー
 st.markdown("<h2>📈 配当推移</h2>", unsafe_allow_html=True)
 div_config = generate_compact_column_config(df_div)
 
-# heightオプションを完全に外すことで、枠内のスクロールバーを消し去り、全行を縦に引き伸ばして表示します
+# 【ここを修正】height=820 を指定し、19行分のデータと上下の余白が綺麗に入る高さを強制確保しました。
 st.dataframe(
     df_div,
     use_container_width=True,
-    column_config=div_config
+    column_config=div_config,
+    height=820
 )
 
 # ーーーー キャッシュ・フロー推移 ーーーー
 st.markdown("<h2>💵 キャッシュ・フロー推移</h2>", unsafe_allow_html=True)
 cf_config = generate_compact_column_config(df_cf, is_cf=True)
 
+# 【ここを修正】18行分のキャッシュフローデータがピッタリ収まる高さを指定。
 st.dataframe(
     df_cf,
     use_container_width=True,
-    column_config=cf_config
+    column_config=cf_config,
+    height=780
 )
