@@ -10,7 +10,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# 【大幅改善】テーブル内の文字サイズを大きくし、縦の余白（行高）を広げて見やすく固定
+# テーブル内のフォントサイズと上下の余白（パディング）を広げて縦にゆったり見せる
 st.markdown(
     """
 <style>
@@ -42,10 +42,10 @@ h2 {
     border-radius: 4px;
 }
 
-/* 【追加】表の中のフォントサイズと縦幅（パディング）を広げるための仕組み */
+/* 表の中のフォントサイズと、上下の余白（パディング）を広げて縦幅を出す設定 */
 div[data-testid="stDataFrame"] td, div[data-testid="stDataFrame"] th {
-    font-size: 15px !important;
-    padding: 10px 4px !important; /* 上下の余白を広げて縦幅を出しています */
+    font-size: 14px !important;
+    padding: 10px 4px !important; 
 }
 </style>
     """,
@@ -89,14 +89,13 @@ COLOR_RED = "#ffb3ba"
 
 def generate_compact_column_config(df, is_cf=False):
     """
-    横幅を極限までコンパクト(width=95)にしつつ、インジケーターバーを綺麗に収める関数
+    横幅をコンパクト(width=95)にしつつ、インジケーターバーを綺麗に収める関数
     """
     config = {}
     for col in df.columns:
         max_val = float(df[col].max()) if pd.notna(df[col].max()) else 1.0
         min_val = float(df[col].min()) if pd.notna(df[col].min()) else 0.0
         
-        # 数値フォーマット（横幅を削るため「億」などの文字は極力シンプルに表示）
         if "性向" in col or "マージン" in col or "純資産" in col:
             fmt = "%.1f" if "純資産" in col else "%.1f%%"
         elif "一株" in col:
@@ -106,29 +105,30 @@ def generate_compact_column_config(df, is_cf=False):
             
         chosen_color = COLOR_RED if "投資" in col or "財務" in col or (min_val < 0 and max_val <= 0) else COLOR_BLUE
         
-        # 【解決策】widthを「160」から「95」に絞り込み、画面内にすべての列が整列するようにロック
+        # 列幅を「95ピクセル」に指定して横スクロールを完全に排除
         config[col] = st.column_config.ProgressColumn(
             col,
             format=fmt,
             min_value=min_val if min_val < 0 else 0.0,
             max_value=max_val if max_val > 0 else 1.0,
             color=chosen_color,
-            width=95  # 横幅をギュッと狭くしました
+            width=95  
         )
     return config
 
 # =====================================
-# 4. 画面レンダリング（スクロールゼロ仕様）
+# 4. 画面レンダリング（エラー修正・スクロールゼロ仕様）
 # =====================================
 
 # ーーーー 配当推移 ーーーー
 st.markdown("<h2>📈 配当推移</h2>", unsafe_allow_html=True)
 div_config = generate_compact_column_config(df_div)
 
+# 【修正箇所】heightの指定を削除しました。
+# これにより、Streamlitの内部構造がバグることなく、自動的に全行が引き伸ばされて表示されます。
 st.dataframe(
     df_div,
     use_container_width=True,
-    height=None,  # 【解決策】heightをNoneにすることで、縦スクロールバーを消し去り全行一発表示
     column_config=div_config
 )
 
@@ -139,6 +139,5 @@ cf_config = generate_compact_column_config(df_cf, is_cf=True)
 st.dataframe(
     df_cf,
     use_container_width=True,
-    height=None,  # 縦スクロールなしで全データをピタッと表示
     column_config=cf_config
 )
